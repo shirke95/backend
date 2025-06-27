@@ -1,6 +1,8 @@
 from .products import products  # Assuming you have a products.py file with product data
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from .models import Product  # Import your Product model
+from .serializers import ProductSerializer  # Import your Product serializer
 
 
 # Create your views here.
@@ -38,13 +40,16 @@ def getProducts(request):
     #     },
     #     # Add more products as needed
     # ]
+    products = Product.objects.all()
+    serializer = ProductSerializer(products, many=True)
+    products = serializer.data  # Convert queryset to list of dictionaries
     return Response(products)
 
 
 @api_view(["GET"])
 def getProduct(request, pk):
-    product = next((item for item in products if item["_id"] == pk), None)
-    if product:
-        return Response(product)
-    else:
-        return Response({"detail": "Product not found"}, status=404)    
+    # product=Product.objects.filter(id=pk).first()
+    product = Product.objects.get(_id=pk)
+    serializer = ProductSerializer(product, many=False)
+    products = serializer.data  # Convert queryset to list of dictionaries
+    return Response(products)
