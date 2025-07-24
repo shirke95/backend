@@ -1,37 +1,30 @@
 from rest_framework import serializers
-from .models import Product
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
+from .models import Product, Order, OrderItem, ShippingAddress, Review
 
 
-# Example Product model serializer
 class UserSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField(read_only=True)
     _id = serializers.SerializerMethodField(read_only=True)
     isAdmin = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
-        model = User  # Assuming you have a User model
-        fields = [
-            "id",
-            "_id",
-            "username",
-            "email",
-            "name",
-            "isAdmin",
-        ]  # Adjust fields as necessary
+        model = User
+        fields = ["id", "_id", "username", "email", "name", "isAdmin"]
 
     def get__id(self, obj):
-        return str(obj.id)
+        return obj.id
 
     def get_isAdmin(self, obj):
         return obj.is_staff
 
     def get_name(self, obj):
-        name = obj.first_name or obj.last_name
-        if not name:
+        name = obj.first_name
+        if name == "":
             name = obj.email
+
         return name
 
 
@@ -40,15 +33,7 @@ class UserSerializerWithToken(UserSerializer):
 
     class Meta:
         model = User
-        fields = [
-            "id",
-            "_id",
-            "username",
-            "email",
-            "name",
-            "isAdmin",
-            "token",
-        ]  # Adjust fields as necessary
+        fields = ["id", "_id", "username", "email", "name", "isAdmin", "token"]
 
     def get_token(self, obj):
         token = RefreshToken.for_user(obj)
@@ -56,6 +41,16 @@ class UserSerializerWithToken(UserSerializer):
 
 
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
+    # @classmethod
+    # def get_token(cls, user):
+    #     token = super().get_token(user)
+
+    #     # Add custom claims
+    #     token['name'] = user.name
+    #     # ...
+
+    #     return token
+
     def validate(self, attrs):
         data = super().validate(attrs)
 
@@ -64,21 +59,62 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         serializer = UserSerializerWithToken(self.user).data
         for key, value in serializer.items():
             data[key] = value
-
         return data
 
-    # @classmethod
-    # def get_token(cls, user):
-    #     token = super().get_token(user)
 
-    #     # Add custom claims
-    #     token["username"] = user.username
-    #     # ...
-
-    #     return token
+class ReviewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Review
+        fields = "__all__"
 
 
 class ProductSerializer(serializers.ModelSerializer):
+    reviews = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = Product
         fields = "__all__"
+
+    def get_reviews(self, obj):
+        reviews = obj.review_set.all()
+        serializer = ReviewSerializer(reviews, many=True)
+        return serializer.data
+
+
+class ShippingAddressSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ShippingAddress
+        fields = "__all__"
+
+
+class OrderItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OrderItem
+        fields = "__all__"
+
+
+class OrderSerializer(serializers.ModelSerializer):
+    orderItems = serializers.SerializerMethodField(read_only=True)
+    shippingAddress = serializers.SerializerMethodField(read_only=True)
+    user = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = Order
+        fields = "__all__"
+
+    def get_orderItems(self, obj):
+        items = obj.orderitem_set.all()
+        serializer = OrderItemSerializer(items, many=True)
+        return serializer.data
+
+    def get_shippingAddress(self, obj):
+        try:
+            address = ShippingAddressSerializer(obj.shippingaddress, many=False).data
+        except:
+            address = False
+        return address
+
+    def get_user(self, obj):
+        user = obj.user
+        serializer = UserSerializer(user, many=False)
+        return serializer.data
