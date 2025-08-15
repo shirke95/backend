@@ -1,14 +1,18 @@
-from django.shortcuts import render
-
+import razorpay
+from django.conf import settings
+from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from base.models import Product, Order, OrderItem, ShippingAddress
-from base.serializers import ProductSerializer, OrderSerializer
+from base.models import Order, OrderItem, Payment, Product, ShippingAddress
+from base.serializers import OrderSerializer
 
-from rest_framework import status
-from datetime import datetime
+
+# Razorpay client
+razorpay_client = razorpay.Client(
+    auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
+)
 
 
 @api_view(["POST"])
@@ -84,7 +88,7 @@ def addOrderItems(request):
 #     return Response(serializer.data)
 
 
-@api_view(['GET'])
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def getOrderById(request, pk):
 
@@ -96,13 +100,17 @@ def getOrderById(request, pk):
             serializer = OrderSerializer(order, many=False)
             return Response(serializer.data)
         else:
-            Response({'detail': 'Not authorized to view this order'},
-                     status=status.HTTP_400_BAD_REQUEST)
+            Response(
+                {"detail": "Not authorized to view this order"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
     except:
-        return Response({'detail': 'Order does not exist'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"detail": "Order does not exist"}, status=status.HTTP_400_BAD_REQUEST
+        )
 
 
-@api_view(['PUT'])
+@api_view(["PUT"])
 @permission_classes([IsAuthenticated])
 def updateOrderToPaid(request, pk):
     order = Order.objects.get(_id=pk)
@@ -111,7 +119,7 @@ def updateOrderToPaid(request, pk):
     order.paidAt = datetime.now()
     order.save()
 
-    return Response('Order was paid')
+    return Response("Order was paid")
 
 
 # @api_view(['PUT'])
@@ -124,3 +132,68 @@ def updateOrderToPaid(request, pk):
 #     order.save()
 
 #     return Response('Order was delivered')
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def create_order(request):
+    try:
+        amount = int(request.data.get("amount")) * 100  # amount in paise
+        currency = "INR"
+
+        # Create Razorpay order
+        razorpay_order = razorpay_client.order.create(
+            {"amount": amount, "currency": currency, "payment_capture": 1}
+        )
+
+        # Save to DB
+        payment = Payment.objects.create(
+            user=request.user,
+            order_id=razorpay_order["id"],
+            amount=request.data.get("amount"),
+            currency=currency,
+            status="created",
+        )
+
+        return Response(
+            {
+                "order_id": razorpay_order["id"],
+                "amount": amount,
+                "currency": currency,
+                "key": settings.RAZORPAY_KEY_ID,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def verify_payment(request):
+    try:
+        order_id = request.data.get("order_id")
+        payment_id = request.data.get("payment_id")
+        signature = request.data.get("signature")
+
+        params_dict = {
+            "razorpay_order_id": order_id,
+            "razorpay_payment_id": payment_id,
+            "razorpay_signature": signature,
+        }
+
+        # Verify signature
+        razorpay_client.utility.verify_payment_signature(params_dict)
+
+        # Update DB
+        payment = Payment.objects.get(order_id=order_id)
+        payment.payment_id = payment_id
+        payment.signature = signature
+        payment.status = "paid"
+        payment.save()
+
+        return Response({"message": "Payment successful"}, status=status.HTTP_200_OK)
+    except razorpay.errors.SignatureVerificationError:
+        return Response(
+            {"error": "Payment verification failed"}, status=status.HTTP_400_BAD_REQUEST
+        )
