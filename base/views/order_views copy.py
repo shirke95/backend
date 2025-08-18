@@ -1,23 +1,20 @@
-import hashlib
-import hmac
 from datetime import datetime
+import hmac
+import hashlib
+
+from django.conf import settings
 
 import razorpay
-from django.conf import settings
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from base.models import Order, OrderItem, Product, ShippingAddress
 from base.serializers import OrderSerializer
 
-
-# Razorpay client
-razorpay_client = razorpay.Client(
-    auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
-)
+client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
 
 
 @api_view(["POST"])
@@ -76,22 +73,21 @@ def addOrderItems(request):
         return Response(serializer.data)
 
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def getMyOrders(request):
-    user = request.user
-    orders = user.order_set.all()
-    serializer = OrderSerializer(orders, many=True)
-    return Response(serializer.data)
+# @api_view(['GET'])
+# @permission_classes([IsAuthenticated])
+# def getMyOrders(request):
+#     user = request.user
+#     orders = user.order_set.all()
+#     serializer = OrderSerializer(orders, many=True)
+#     return Response(serializer.data)
 
 
-@api_view(["GET"])
-@permission_classes([IsAdminUser])
-def getOrders(request):
-    print("hello")
-    orders = Order.objects.all()
-    serializer = OrderSerializer(orders, many=True)
-    return Response(serializer.data)
+# @api_view(['GET'])
+# @permission_classes([IsAdminUser])
+# def getOrders(request):
+#     orders = Order.objects.all()
+#     serializer = OrderSerializer(orders, many=True)
+#     return Response(serializer.data)
 
 
 @api_view(["GET"])
@@ -128,72 +124,77 @@ def updateOrderToPaid(request, pk):
     return Response("Order was paid")
 
 
-@api_view(["PUT"])
-@permission_classes([IsAdminUser])
-def updateOrderToDelivered(request, pk):
-    order = Order.objects.get(_id=pk)
+# @api_view(['PUT'])
+# @permission_classes([IsAdminUser])
+# def updateOrderToDelivered(request, pk):
+#     order = Order.objects.get(_id=pk)
 
-    order.isDelivered = True
-    order.deliveredAt = datetime.now()
-    order.save()
+#     order.isDelivered = True
+#     order.deliveredAt = datetime.now()
+#     order.save()
 
-    return Response("Order was delivered")
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def getOrderDetails(request, pk):
-    try:
-        order = Order.objects.get(_id=pk, user=request.user)
-    except Order.DoesNotExist:
-        return Response({"detail": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    serializer = OrderSerializer(order, many=False)
-
-    # If not already paid, generate a Razorpay order
-    razorpay_order_id = None
-    if not order.isPaid:
-        razorpay_order = razorpay_client.order.create(
-            {
-                "amount": int(order.totalPrice * 100),  # in paisa
-                "currency": "INR",
-                "payment_capture": 1,
-            }
-        )
-        razorpay_order_id = razorpay_order["id"]
-
-    response_data = serializer.data
-    response_data["razorpayOrderId"] = razorpay_order_id
-    response_data["razorpayKey"] = settings.RAZORPAY_KEY_ID  # send public key
-
-    return Response(response_data)
+#     return Response('Order was delivered')
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def verifyPayment(request, pk):
-    data = request.data
-    order_id = data.get("razorpay_order_id")
-    payment_id = data.get("razorpay_payment_id")
-    signature = data.get("razorpay_signature")
+def create_order(request):
+    print("hello")
+    try:
+        amount = request.data.get("amount")
+        amount_in_paise = int(float(amount) * 100)  # Razorpay uses paise
 
-    generated_signature = hmac.new(
-        settings.RAZORPAY_KEY_SECRET.encode(),
-        f"{order_id}|{payment_id}".encode(),
-        hashlib.sha256,
-    ).hexdigest()
-
-    if generated_signature == signature:
-        try:
-            order = Order.objects.get(_id=pk)
-            order.isPaid = True
-            order.save()
-            return Response({"status": "Payment verified"})
-        except Order.DoesNotExist:
-            return Response(
-                {"detail": "Order not found"}, status=status.HTTP_404_NOT_FOUND
-            )
-    else:
-        return Response(
-            {"detail": "Invalid signature"}, status=status.HTTP_400_BAD_REQUEST
+        razorpay_order = razorpay_client.order.create(
+            {"amount": amount_in_paise, "currency": "INR", "payment_capture": "1"}
         )
+
+        payment = Payment.objects.create(
+            user=request.user,
+            order_id=razorpay_order["id"],
+            amount=amount,
+            status=razorpay_order["status"],
+        )
+
+        return Response(
+            {
+                "order_id": razorpay_order["id"],
+                "amount": amount,
+                "currency": "INR",
+                "key": settings.RAZORPAY_KEY_ID,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def verify_payment(request):
+    try:
+        order_id = request.data.get("order_id")
+        payment_id = request.data.get("payment_id")
+        signature = request.data.get("signature")
+
+        generated_signature = hmac.new(
+            bytes(settings.RAZORPAY_KEY_SECRET, "utf-8"),
+            msg=bytes(order_id + "|" + payment_id, "utf-8"),
+            digestmod=hashlib.sha256,
+        ).hexdigest()
+
+        if generated_signature == signature:
+            payment = Payment.objects.get(order_id=order_id)
+            payment.payment_id = payment_id
+            payment.signature = signature
+            payment.status = "paid"
+            payment.save()
+            return Response({"status": "Payment Verified"}, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {"status": "Payment Verification Failed"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)

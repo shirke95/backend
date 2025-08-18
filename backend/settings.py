@@ -51,7 +51,8 @@ INSTALLED_APPS = [
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
-    )
+    ),
+    # "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
 }
 
 SIMPLE_JWT = {
@@ -152,7 +153,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",  # Adjust this to your frontend URL
 ]
-# CORS_ALLOW_ALL_ORIGINS = True  # Uncomment this to allow all origins (not recommended for production)
+CORS_ALLOW_ALL_ORIGINS = True  # Uncomment this to allow all origins (not recommended for production)
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(days=30),
